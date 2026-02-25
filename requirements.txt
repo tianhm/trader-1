@@ -1,7 +1,5 @@
 aiohttp[speedups]
-aioredis[hiredis]
-redis
-ujson
+orjson
 appdirs
 django
 beautifulsoup4
@@ -12,7 +10,6 @@ pandas
 TA-Lib
 croniter
 asynctest
-django-redis
 django-choices
 mysqlclient
 tqdm
@@ -23,3 +20,4 @@ huggingface_hub
 matplotlib
 safetensors
 sshtunnel
+pybind11

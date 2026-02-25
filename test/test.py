@@ -1,19 +1,16 @@
 import sys
 import os
 import django
-if sys.platform == 'darwin':
-    sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
-elif sys.platform == 'win32':
-    sys.path.append(r'E:\github\dashboard')
-else:
-    sys.path.append('/root/gitee/dashboard')
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
 os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 django.setup()
 import asyncio
 import datetime
 import pytz
-from trader.utils import update_from_czce
+from utils import update_from_czce
 
 
 if __name__ == "__main__":

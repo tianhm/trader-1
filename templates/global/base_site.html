@@ -1,0 +1,30 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="author" content="timercrack">
+    <title>和弦基金</title>
+    <link rel="icon" href="{% static 'image/favicon.ico' %}">
+    <link rel="stylesheet" href="{% static "third_part/bootstrap-3.3.7/css/bootstrap.min.css" %}">
+    <link rel="stylesheet" href="{% static "third_part/font-awesome-4.6.3/css/font-awesome.min.css" %}">
+    <link rel="stylesheet" href="{% static "css/global.css" %}">
+    {% block extracss %}{% endblock %}
+</head>
+<body>
+{% include 'global/top_navbar.html' %}
+<div class="container-fluid" role="main">
+    {% block content %}{% endblock %}
+    <footer class="modal-footer">
+        <p>© 2016 V2.0 timercrack.me All Rights Reserved. timercrack 版权所有</p>
+    </footer>
+</div>
+<script src="{% static "third_part/jquery-3.1.0.min.js" %}"></script>
+<script src="{% static "third_part/bootstrap-3.3.7/js/bootstrap.min.js" %}"></script>
+<script src="{% static "third_part/echarts.min.js" %}"></script>
+<script src="{% static "js/global.js" %}"></script>
+{% block extrajs %}{% endblock %}
+</body>
+</html>
