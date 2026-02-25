@@ -1,4 +1,5 @@
 # coding=utf-8
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportOptionalSubscript=false, reportOptionalOperand=false, reportArgumentType=false, reportOperatorIssue=false, reportGeneralTypeIssues=false
 #
 # Copyright 2016 timercrack
 #
@@ -18,6 +19,7 @@ import re
 from collections import defaultdict
 import datetime
 from decimal import Decimal
+from typing import Tuple, Any
 import logging
 from django.db.models import Q, F, Sum
 from django.utils import timezone
@@ -68,7 +70,7 @@ class TradeStrategy(BaseModule):
         now = int(today.strftime('%H%M'))
         if today.isoweekday() < 6 and (820 <= now <= 1550 or 2010 <= now <= 2359):  # 非交易时间查不到数据
             await self.refresh_account()
-            order_list = await self.query('Order')
+            order_list = await self.query('Order') or []
             for order in order_list:
                 # 未成交订单
                 if int(order['OrderStatus']) in range(1, 5) and order['OrderSubmitStatus'] == ApiStruct.OSS_Accepted:
@@ -114,7 +116,7 @@ class TradeStrategy(BaseModule):
     async def refresh_position(self):
         try:
             logger.debug('更新持仓...')
-            pos_list = await self.query('InvestorPositionDetail')
+            pos_list = await self.query('InvestorPositionDetail') or []
             self.__cur_pos.clear()
             for pos in pos_list:
                 if 'empty' in pos and pos['empty'] is True or len(pos['InstrumentID']) > 6:
@@ -157,7 +159,7 @@ class TradeStrategy(BaseModule):
         try:
             logger.debug("更新合约...")
             inst_dict = defaultdict(dict)
-            inst_list = await self.query('Instrument')
+            inst_list = await self.query('Instrument') or []
             for inst in inst_list:
                 if inst['empty']:
                     continue
@@ -360,7 +362,9 @@ class TradeStrategy(BaseModule):
             await sub_client.close()
             result = task.result()[0]
             if 'ErrorID' in result:
-                logger.warning(f"撤销订单出错: {ctp_errors[result['ErrorID']]}")
+                err_id = result['ErrorID']
+                err_msg = ctp_errors.get(err_id, f"未知错误码:{err_id}")
+                logger.warning(f"撤销订单出错: {err_msg}")
                 return False
             return True
         except Exception as e:
@@ -514,7 +518,7 @@ class TradeStrategy(BaseModule):
                 return
             if order["OrderSysID"]:
                 logger.debug(f"订单回报: {self.get_order_string(order)}")
-            order_obj, _ = self.save_order(order)
+            order_obj, created = self.save_order(order)
             if not order_obj:
                 return
             signal = order_obj.signal
@@ -722,7 +726,7 @@ class TradeStrategy(BaseModule):
         except Exception as e:
             logger.warning(f'calculate 发生错误: {repr(e)}', exc_info=True)
 
-    def calc_signal(self, inst: Instrument, day: datetime.datetime) -> (Signal, Decimal):
+    def calc_signal(self, inst: Instrument, day: datetime.datetime) -> tuple[Any | None, Decimal]:
         try:
             break_n = self.__strategy.param_set.get(code='BreakPeriod').int_value
             atr_n = self.__strategy.param_set.get(code='AtrPeriod').int_value
@@ -850,10 +854,11 @@ class TradeStrategy(BaseModule):
                 volume_ori = volume_ori if volume_ori else volume
                 logger.info(f"新信号: {sig}({volume_ori:.1f}手) "
                             f"预估保证金: {use_margin:.0f}({use_margin / 10000:.1f}万)")
-                return signal, use_margin
+                return signal, Decimal(use_margin)
         except Exception as e:
             logger.warning(f'calc_signal 发生错误: {repr(e)}', exc_info=True)
-        return None, 0
+            return None, Decimal(0)
+        return None, Decimal(0)
 
     def calc_up_limit(self, inst: Instrument, bar: DailyBar):
         settlement = bar.settlement

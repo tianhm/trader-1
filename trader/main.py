@@ -46,7 +46,8 @@ class RedislHandler(logging.StreamHandler):
 
 
 if __name__ == '__main__':
-    os.path.exists(app_dir.user_log_dir) or os.makedirs(app_dir.user_log_dir)
+    if not os.path.exists(app_dir.user_log_dir):
+        os.makedirs(app_dir.user_log_dir)
     log_file = os.path.join(app_dir.user_log_dir, 'trader.log')
     file_handler = handlers.RotatingFileHandler(log_file, encoding='utf-8', maxBytes=1024*1024, backupCount=1)
     general_formatter = logging.Formatter(config.get('LOG', 'format'))
@@ -56,7 +57,7 @@ if __name__ == '__main__':
     console_handler.setFormatter(general_formatter)
     console_handler.setLevel('DEBUG')
     redis_handler = RedislHandler(config.get('MSG_CHANNEL', 'weixin_log'))
-    redis_handler.setFormatter(config.get('LOG', 'weixin_format'))
+    redis_handler.setFormatter(logging.Formatter(config.get('LOG', 'weixin_format')))
     redis_handler.setLevel(config.get('LOG', 'flower_level', fallback='INFO'))
     logger = logging.getLogger()
     logger.setLevel('DEBUG')

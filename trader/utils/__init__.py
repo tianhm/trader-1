@@ -27,6 +27,7 @@ from itertools import combinations
 
 import pytz
 import aiohttp
+import numpy as np
 from django.db.models import Q, F, Max, Min
 from django.utils import timezone
 import redis
@@ -98,7 +99,7 @@ async def is_trading_day(day: datetime.datetime):
     return day, day.strftime('%Y%m%d') in (s.get('TradingDay'), s.get('LastTradingDay'))
 
 
-async def check_trading_day(day: datetime.datetime) -> (datetime.datetime, bool):
+async def check_trading_day(day: datetime.datetime) -> tuple[datetime.datetime, bool]:
     async with aiohttp.ClientSession() as session:
         await max_conn_cffex.acquire()
         async with session.get(
@@ -322,27 +323,29 @@ async def update_from_cffex(day: datetime.datetime) -> bool:
                     <expiredate>20211217</expiredate>
                     </dailydata>
                     """
+                    instrument_id = (inst_data.findtext('instrumentid') or '').strip()
+                    if not instrument_id:
+                        continue
                     # 不存储期权合约
-                    if len(inst_data.findtext('instrumentid').strip()) > 6:
+                    if len(instrument_id) > 6:
                         continue
-                    if inst_data.findtext('productid').strip() in IGNORE_INST_LIST:
+                    product_id = (inst_data.findtext('productid') or '').strip()
+                    if product_id in IGNORE_INST_LIST:
                         continue
+                    close_price = (inst_data.findtext('closeprice') or '0').replace(',', '')
+                    settlement_price = (inst_data.findtext('settlementprice') or '').replace(',', '')
+                    pre_settlement = (inst_data.findtext('presettlementprice') or close_price).replace(',', '')
                     DailyBar.objects.update_or_create(
-                        code=inst_data.findtext('instrumentid').strip(),
+                        code=instrument_id,
                         exchange=ExchangeType.CFFEX, time=day, defaults={
-                            'expire_date': inst_data.findtext('expiredate')[2:6],
-                            'open': inst_data.findtext('openprice').replace(',', '') if inst_data.findtext(
-                                'openprice') else inst_data.findtext('closeprice').replace(',', ''),
-                            'high': inst_data.findtext('highestprice').replace(',', '') if inst_data.findtext(
-                                'highestprice') else inst_data.findtext('closeprice').replace(',', ''),
-                            'low': inst_data.findtext('lowestprice').replace(',', '') if inst_data.findtext(
-                                'lowestprice') else inst_data.findtext('closeprice').replace(',', ''),
-                            'close': inst_data.findtext('closeprice').replace(',', ''),
-                            'settlement': inst_data.findtext('settlementprice').replace(',', '')
-                            if inst_data.findtext('settlementprice') else
-                            inst_data.findtext('presettlementprice').replace(',', ''),
-                            'volume': inst_data.findtext('volume').replace(',', ''),
-                            'open_interest': inst_data.findtext('openinterest').replace(',', '')})
+                            'expire_date': ((inst_data.findtext('expiredate') or '')[2:6]),
+                            'open': (inst_data.findtext('openprice') or close_price).replace(',', ''),
+                            'high': (inst_data.findtext('highestprice') or close_price).replace(',', ''),
+                            'low': (inst_data.findtext('lowestprice') or close_price).replace(',', ''),
+                            'close': close_price,
+                            'settlement': settlement_price if settlement_price else pre_settlement,
+                            'volume': (inst_data.findtext('volume') or '0').replace(',', ''),
+                            'open_interest': (inst_data.findtext('openinterest') or '0').replace(',', '')})
                 return True
     except Exception as e:
         logger.warning(f'update_from_cffex failed: {repr(e)}', exc_info=True)
@@ -401,16 +404,23 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
     if check_bar is None:
         check_bar = DailyBar.objects.filter(code=inst.main_code).last()
         logger.error(f"calc_main_inst 未找到主力合约：{inst} 使用上一个主力合约")
+    if check_bar is None:
+        logger.error(f"calc_main_inst 仍未找到可用主力合约：{inst}")
+        return inst.main_code, updated
     if inst.main_code is None:  # 之前没有主力合约
         inst.main_code = check_bar.code
         inst.change_time = day
         inst.save(update_fields=['main_code', 'change_time'])
         store_main_bar(inst, check_bar)
     else:
+        current_main = inst.main_code
+        if current_main is None:
+            return inst.main_code, updated
+        check_code = check_bar.code
         # 主力合约发生变化, 做换月处理
-        if check_bar and inst.main_code != check_bar.code and check_bar.code > inst.main_code:
+        if check_code and current_main != check_code and check_code > current_main:
             inst.last_main = inst.main_code
-            inst.main_code = check_bar.code
+            inst.main_code = check_code
             inst.change_time = day
             inst.save(update_fields=['last_main', 'main_code', 'change_time'])
             store_main_bar(inst, check_bar)
@@ -498,17 +508,23 @@ def find_best_score(n: int = 20):
 
 
 def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy):
-    break_n = strategy.param_set.get(code='BreakPeriod').int_value
-    atr_n = strategy.param_set.get(code='AtrPeriod').int_value
-    long_n = strategy.param_set.get(code='LongPeriod').int_value
-    short_n = strategy.param_set.get(code='ShortPeriod').int_value
-    stop_n = strategy.param_set.get(code='StopLoss').int_value
+    param_set = strategy.param_set  # pyright: ignore[reportAttributeAccessIssue]
+    break_n = param_set.get(code='BreakPeriod').int_value
+    atr_n = param_set.get(code='AtrPeriod').int_value
+    long_n = param_set.get(code='LongPeriod').int_value
+    short_n = param_set.get(code='ShortPeriod').int_value
+    stop_n = param_set.get(code='StopLoss').int_value
     df = to_df(MainBar.objects.filter(
         time__lte=day.date(),
         exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
         'time', 'open', 'high', 'low', 'close', 'settlement'), index_col='time', parse_dates=['time'])
     df.index = pd.DatetimeIndex(df.time, tz=pytz.FixedOffset(480))
-    df['atr'] = ATR(df.high, df.low, df.close, timeperiod=atr_n)
+    df['atr'] = ATR(
+        np.asarray(df.high, dtype=float),
+        np.asarray(df.low, dtype=float),
+        np.asarray(df.close, dtype=float),
+        timeperiod=atr_n,
+    )
     # df columns: 0:time,1:open,2:high,3:low,4:close,5:settlement,6:atr,7:short_trend,8:long_trend
     df['short_trend'] = df.close
     df['long_trend'] = df.close
@@ -527,6 +543,8 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
             if df.short_trend[idx] > df.long_trend[idx] and int(df.close[idx]) >= int(df.high_line[idx-1]):
                 new_bar = MainBar.objects.filter(
                     exchange=inst.exchange, product_code=inst.product_code, time=cur_date).first()
+                if new_bar is None:
+                    continue
                 Signal.objects.create(
                     code=new_bar.code, trigger_value=df.atr[idx],
                     strategy=strategy, instrument=inst, type=SignalType.BUY, processed=True,
@@ -540,6 +558,8 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                 new_bar = MainBar.objects.filter(
                     exchange=inst.exchange, product_code=inst.product_code,
                     time=df.index[cur_idx].to_pydatetime().date()).first()
+                if new_bar is None:
+                    continue
                 Signal.objects.create(
                     code=new_bar.code, trigger_value=df.atr[idx],
                     strategy=strategy, instrument=inst, type=SignalType.SELL_SHORT, processed=True,
@@ -549,7 +569,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                     code=new_bar.code, direction=DirectionType.values[DirectionType.SHORT],
                     open_time=cur_date, shares=1, filled_shares=1, avg_entry_price=new_bar.open)
                 cur_pos = cur_idx * -1
-        elif cur_pos > 0 and prev_date > last_trade.open_time:
+        elif cur_pos > 0 and last_trade and prev_date > last_trade.open_time:
             hh = float(MainBar.objects.filter(
                 exchange=inst.exchange, product_code=inst.product_code,
                 time__gte=last_trade.open_time,
@@ -558,17 +578,21 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                 new_bar = MainBar.objects.filter(
                     exchange=inst.exchange, product_code=inst.product_code,
                     time=df.index[cur_idx].to_pydatetime().date()).first()
+                if new_bar is None:
+                    continue
                 Signal.objects.create(
                     strategy=strategy, instrument=inst, type=SignalType.SELL, processed=True,
                     code=new_bar.code,
                     trigger_time=prev_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
+                if last_trade.avg_entry_price is None or inst.volume_multiple is None:
+                    continue
                 last_trade.avg_exit_price = new_bar.open
                 last_trade.close_time = cur_date
                 last_trade.closed_shares = 1
                 last_trade.profit = (new_bar.open - last_trade.avg_entry_price) * inst.volume_multiple
                 last_trade.save()
                 cur_pos = 0
-        elif cur_pos < 0 and prev_date > last_trade.open_time:
+        elif cur_pos < 0 and last_trade and prev_date > last_trade.open_time:
             ll = float(MainBar.objects.filter(
                 exchange=inst.exchange, product_code=inst.product_code,
                 time__gte=last_trade.open_time,
@@ -577,17 +601,23 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                 new_bar = MainBar.objects.filter(
                     exchange=inst.exchange, product_code=inst.product_code,
                     time=df.index[cur_idx].to_pydatetime().date()).first()
+                if new_bar is None:
+                    continue
                 Signal.objects.create(
                     code=new_bar.code,
                     strategy=strategy, instrument=inst, type=SignalType.BUY_COVER, processed=True,
                     trigger_time=prev_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
+                if last_trade.avg_entry_price is None or inst.volume_multiple is None:
+                    continue
                 last_trade.avg_exit_price = new_bar.open
                 last_trade.close_time = cur_date
                 last_trade.closed_shares = 1
                 last_trade.profit = (last_trade.avg_entry_price - new_bar.open) * inst.volume_multiple
                 last_trade.save()
                 cur_pos = 0
-        if cur_pos != 0 and cur_date.date() == day.date():
+        if cur_pos != 0 and last_trade and cur_date.date() == day.date():
+            if last_trade.avg_entry_price is None or inst.volume_multiple is None:
+                continue
             last_trade.avg_exit_price = df.open[cur_idx]
             last_trade.close_time = cur_date
             last_trade.closed_shares = 1
@@ -608,14 +638,18 @@ def calc_his_all(day: datetime.datetime):
         last_day = Trade.objects.filter(instrument=inst, close_time__isnull=True).values_list(
             'open_time', flat=True).first()
         if last_day is None:
-            last_day = datetime.datetime.combine(
-                MainBar.objects.filter(product_code=inst.product_code, time__lte=day).order_by(
-                    '-time').values_list('time', flat=True).first(), timezone.make_aware(datetime.time.min))
+            last_bar_day = MainBar.objects.filter(product_code=inst.product_code, time__lte=day).order_by(
+                '-time').values_list('time', flat=True).first()
+            if last_bar_day is None:
+                continue
+            last_day = timezone.make_aware(datetime.datetime.combine(last_bar_day, datetime.time.min))
         calc_history_signal(inst, last_day, strategy)
 
 
 def calc_his_up_limit(inst: Instrument, bar: DailyBar):
     ratio = inst.up_limit_ratio
+    if ratio is None or bar.settlement is None or inst.price_tick is None:
+        return Decimal(0)
     ratio = Decimal(round(ratio, 3))
     price = price_round(bar.settlement * (Decimal(1) + ratio), inst.price_tick)
     return price - inst.price_tick
@@ -623,6 +657,8 @@ def calc_his_up_limit(inst: Instrument, bar: DailyBar):
 
 def calc_his_down_limit(inst: Instrument, bar: DailyBar):
     ratio = inst.down_limit_ratio
+    if ratio is None or bar.settlement is None or inst.price_tick is None:
+        return Decimal(0)
     ratio = Decimal(round(ratio, 3))
     price = price_round(bar.settlement * (Decimal(1) - ratio), inst.price_tick)
     return price + inst.price_tick
@@ -682,7 +718,7 @@ def load_kt_data(directory: str = r'D:\test'):
 
 
 # 从交易所获取合约当日的涨跌停幅度 TODO: 广期所
-async def get_contracts_argument(day: datetime.datetime = None) -> bool:
+async def get_contracts_argument(day: datetime.datetime | None = None) -> bool:
     try:
         if day is None:
             day = timezone.localtime()
@@ -773,22 +809,23 @@ async def get_contracts_argument(day: datetime.datetime = None) -> bool:
                     <LONG_LIMIT>1200</LONG_LIMIT>
                     </INDEX>
                     """
-                    inst_id = inst_data.findtext('INSTRUMENT_ID').strip()
+                    inst_id = (inst_data.findtext('INSTRUMENT_ID') or '').strip()
                     # 不存储期权合约
                     if len(inst_id) > 6:
                         continue
-                    code = inst_data.findtext('PRODUCT_ID').strip()
+                    code = (inst_data.findtext('PRODUCT_ID') or '').strip()
                     if code in IGNORE_INST_LIST:
                         continue
-                    limit_ratio = str_to_number(inst_data.findtext('UPPER_VALUE').strip())
+                    limit_ratio = str_to_number((inst_data.findtext('UPPER_VALUE') or '0').strip())
                     redis_client.set(f"LIMITRATIO:{ExchangeType.CFFEX}:{code}:{inst_id}", limit_ratio)
             # 保存数据
             for inst in Instrument.objects.all():
                 ratio = redis_client.get(f"LIMITRATIO:{inst.exchange}:{inst.product_code}:{inst.main_code}")
                 if ratio:
                     ratio = str_to_number(ratio)
-                    inst.up_limit_ratio = ratio
-                    inst.down_limit_ratio = ratio
+                    ratio_decimal = Decimal(str(ratio))
+                    inst.up_limit_ratio = ratio_decimal
+                    inst.down_limit_ratio = ratio_decimal
                     inst.save(update_fields=['up_limit_ratio', 'down_limit_ratio'])
         return True
     except Exception as e:
