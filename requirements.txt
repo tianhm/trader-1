@@ -15,7 +15,6 @@ mysqlclient
 tqdm
 pytz
 tzdata
-akshare
 einops
 huggingface_hub
 matplotlib
@@ -23,3 +22,4 @@ safetensors
 sshtunnel
 pybind11
 PyYAML
+tushare

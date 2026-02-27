@@ -152,6 +152,15 @@ def get_expire_date(inst_code: str, day: datetime.datetime):
     return expire_date
 
 
+def get_contract_code_regex(product_code: str) -> str:
+    """根据 product_code 生成匹配真实合约代码的 regex。"""
+    pc = str(product_code or '').strip().lower()
+    if pc.endswith('_f'):
+        base = re.escape(pc[:-2])
+        return rf'^{base}[0-9]+[Ff]$'
+    return rf'^{re.escape(pc)}[0-9]+$'
+
+
 async def update_from_shfe(day: datetime.datetime) -> bool:
     try:
         async with _create_http_session() as session:
@@ -253,107 +262,76 @@ async def update_from_czce(day: datetime.datetime) -> bool:
 
 async def update_from_dce(day: datetime.datetime) -> bool:
     try:
-        import akshare as ak
-
-        day_str = day.strftime('%Y%m%d')
-
-        def _pick_column(columns, candidates):
-            for item in candidates:
-                if item in columns:
-                    return item
-            return None
-
-        def _to_number(value, default=0.0):
+        def _to_number(value: Any, default: float = 0.0) -> float:
             if value is None:
                 return default
             text = str(value).strip().replace(',', '')
             if text in ['', '-', '--', 'nan', 'None']:
                 return default
-            return str_to_number(text)
+            return float(str_to_number(text))
 
-        await max_conn_dce.acquire()
-        try:
-            table_df = await asyncio.to_thread(ak.futures_hist_table_em)
-        finally:
-            max_conn_dce.release()
-
-        if table_df is None or table_df.empty:
-            logger.warning(f'update_from_dce empty futures_hist_table_em: day={day.date()}')
+        token = config.get('TUSHARE', 'token', fallback='').strip()
+        if not token:
+            logger.warning('update_from_dce skipped: missing tushare.token in config.yaml')
             return False
 
-        columns = list(table_df.columns)
-        symbol_col = _pick_column(columns, ['名称', '合约名称', 'symbol', 'Symbol'])
-        code_col = _pick_column(columns, ['代码', '合约代码', 'code', 'Code'])
-        exchange_col = _pick_column(columns, ['交易所', '市场', 'exchange', 'Exchange'])
+        day_str = day.strftime('%Y%m%d')
 
-        if not symbol_col:
-            logger.warning(f'update_from_dce missing symbol column in futures_hist_table_em: columns={columns}')
-            return False
+        def _load_daily_df():
+            import tushare as ts
+            pro = ts.pro_api(token)
+            return pro.fut_daily(
+                trade_date=day_str,
+                exchange='DCE',
+                fields='ts_code,trade_date,pre_close,pre_settle,open,high,low,close,settle,vol,oi',
+            )
 
-        # 过滤 DCE 可用合约；若无交易所列，则兜底用代码前缀匹配本地 DCE 品种
-        if exchange_col:
-            dce_df = table_df[table_df[exchange_col].astype(str).str.contains('大连|DCE|dce', regex=True, na=False)]
-        else:
-            code_prefixes = sorted({str(i.product_code).lower() for i in Instrument.objects.filter(exchange=ExchangeType.DCE)})
-            if code_col:
-                pattern = r'^(?:' + '|'.join(re.escape(p) for p in code_prefixes) + r')'
-                dce_df = table_df[table_df[code_col].astype(str).str.lower().str.contains(pattern, regex=True, na=False)]
-            else:
-                dce_df = table_df.iloc[0:0]
+        async with max_conn_dce:
+            df = await asyncio.wait_for(asyncio.to_thread(_load_daily_df), timeout=30)
 
-        if dce_df.empty:
-            logger.warning(f'update_from_dce no dce rows in futures_hist_table_em: day={day.date()}')
+        if df is None or df.empty:
+            logger.warning(f'update_from_dce empty tushare result: day={day.date()}')
             return False
 
         parsed_count = 0
-        for _, row in dce_df.iterrows():
-            symbol = str(row.get(symbol_col, '')).strip()
-            if not symbol:
+        fail_count = 0
+
+        for _, row in df.iterrows():
+            ts_code = str(row.get('ts_code') or '').strip()
+            base_code = ts_code.split('.', maxsplit=1)[0]
+            m = re.match(r'^([A-Za-z]+)(\d+)([A-Za-z]*)$', base_code)
+            if not m:
+                fail_count += 1
+                continue
+            raw_pc = m.group(1).lower()
+            digits = m.group(2)
+            tail = (m.group(3) or '').upper()
+            if tail and tail != 'F':
+                fail_count += 1
                 continue
 
-            contract_code = ''
-            if code_col:
-                contract_code = str(row.get(code_col, '')).strip()
-            contract_code = contract_code.lower()
-
-            if not contract_code:
-                continue
-
-            product_code_match = re.findall('[A-Za-z]+', contract_code)
-            if not product_code_match:
-                continue
-            product_code = product_code_match[0].lower()
+            product_code = f'{raw_pc}_f' if tail == 'F' else raw_pc
             if product_code in IGNORE_INST_LIST:
                 continue
 
-            try:
-                await max_conn_dce.acquire()
-                try:
-                    hist_df = await asyncio.to_thread(
-                        ak.futures_hist_em,
-                        symbol=symbol,
-                        period='daily',
-                        start_date=day_str,
-                        end_date=day_str,
-                    )
-                finally:
-                    max_conn_dce.release()
-            except Exception:
+            contract_code = f'{raw_pc}{digits}{tail}' if tail else f'{raw_pc}{digits}'
+
+            close = _to_number(row.get('close'), 0)
+            settlement = _to_number(row.get('settle'), close)
+            if settlement <= 0:
+                settlement = _to_number(row.get('pre_settle'), close)
+
+            if close <= 0 and settlement > 0:
+                close = settlement
+            if close <= 0:
+                fail_count += 1
                 continue
 
-            if hist_df is None or hist_df.empty:
-                continue
-
-            data = hist_df.iloc[-1]
-            close = _to_number(data.get('收盘'), 0)
-            open_price = _to_number(data.get('开盘'), close)
-            high = _to_number(data.get('最高'), close)
-            low = _to_number(data.get('最低'), close)
-            volume = _to_number(data.get('成交量'), 0)
-            open_interest = _to_number(data.get('持仓量'), 0)
-
-            if close == 0:
-                continue
+            open_price = _to_number(row.get('open'), close)
+            high = _to_number(row.get('high'), close)
+            low = _to_number(row.get('low'), close)
+            volume = _to_number(row.get('vol'), 0)
+            open_interest = _to_number(row.get('oi'), 0)
 
             DailyBar.objects.update_or_create(
                 code=contract_code,
@@ -365,7 +343,7 @@ async def update_from_dce(day: datetime.datetime) -> bool:
                     'high': high,
                     'low': low,
                     'close': close,
-                    'settlement': close,
+                    'settlement': settlement if settlement > 0 else close,
                     'volume': volume,
                     'open_interest': open_interest,
                 },
@@ -373,9 +351,9 @@ async def update_from_dce(day: datetime.datetime) -> bool:
             parsed_count += 1
 
         if parsed_count == 0:
-            logger.warning(f'update_from_dce no rows parsed by akshare futures_hist_em: day={day.date()}')
+            logger.warning(f'update_from_dce no rows parsed by tushare: day={day.date()} fail_count={fail_count}')
             return False
-        logger.info(f'update_from_dce akshare success: day={day.date()} rows={parsed_count}')
+        logger.info(f'update_from_dce tushare success: day={day.date()} rows={parsed_count} fail_rows={fail_count}')
         return True
     except Exception as e:
         logger.warning(f'update_from_dce failed: {repr(e)}', exc_info=True)
@@ -522,22 +500,23 @@ def handle_rollover(inst: Instrument, new_bar: DailyBar):
 def calc_main_inst(inst: Instrument, day: datetime.datetime):
     updated = False
     expire_date = get_expire_date(inst.main_code, day) if inst.main_code else day.strftime('%y%m')
+    code_regex = get_contract_code_regex(inst.product_code or '')
     # 条件1: 成交量最大 & (成交量>1万 & 持仓量>1万 or 股指) = 主力合约
     check_bar = DailyBar.objects.filter(
         (Q(exchange=ExchangeType.CFFEX) | (Q(volume__gte=10000) & Q(open_interest__gte=10000))),
-        exchange=inst.exchange, code__regex=f"^{inst.product_code}[0-9]+",
+        exchange=inst.exchange, code__regex=code_regex,
         expire_date__gte=expire_date, time=day.date()).order_by('-volume').first()
     # 条件2: 不满足条件1但是连续3天成交量最大 = 主力合约
     if check_bar is None:
         check_bars = DailyBar.objects.raw(
             "SELECT a.* from panel_dailybar a INNER JOIN (SELECT time, max(volume) v FROM panel_dailybar "
             "WHERE CODE RLIKE %s and time<=%s GROUP BY time ORDER BY time DESC LIMIT 3) b "
-            "WHERE a.time=b.time and a.volume=b.v ORDER BY a.time DESC LIMIT 3", [f"^{inst.product_code}[0-9]+", day])
+            "WHERE a.time=b.time and a.volume=b.v ORDER BY a.time DESC LIMIT 3", [code_regex, day])
         check_bar = check_bars[0] if len(set(bar.code for bar in check_bars)) == 1 else None
     # 条件3: 取当前成交量最大的作为主力
     if check_bar is None:
         check_bar = DailyBar.objects.filter(
-            exchange=inst.exchange, code__regex=f"^{inst.product_code}[0-9]+",
+            exchange=inst.exchange, code__regex=code_regex,
             expire_date__gte=expire_date, time=day.date()).order_by('-volume', '-open_interest', 'code').first()
     if check_bar is None:
         check_bar = DailyBar.objects.filter(code=inst.main_code).last()
@@ -567,16 +546,17 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
 
 def create_main(inst: Instrument):
     print('processing ', inst.product_code)
+    code_regex = get_contract_code_regex(inst.product_code or '')
     if inst.change_time is None:
         for day in DailyBar.objects.filter(
                 # time__gte=datetime.datetime.strptime('20211211', '%Y%m%d'),
-                exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
+                exchange=inst.exchange, code__regex=code_regex).order_by(
                 'time').values_list('time', flat=True).distinct():
             print(day, calc_main_inst(inst, timezone.make_aware(datetime.datetime.combine(day, datetime.time.min))))
     else:
         for day in DailyBar.objects.filter(
                 time__gt=inst.change_time,
-                exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
+                exchange=inst.exchange, code__regex=code_regex).order_by(
                 'time').values_list('time', flat=True).distinct():
             print(day, calc_main_inst(inst, timezone.make_aware(datetime.datetime.combine(day, datetime.time.min))))
     return True
