@@ -63,11 +63,11 @@ if(UNIX)
     set(THOST_TRADER_SO "${THOST_API_DIR}/thosttraderapi_se.so")
     set(THOST_MD_SO "${THOST_API_DIR}/thostmduserapi_se.so")
     if(EXISTS "${THOST_TRADER_SO}" AND EXISTS "${THOST_MD_SO}")
-        # 严格按文件名链接，避免退化成 -lthostxxx（会去找 libthostxxx.so）
+        # 使用 -l:filename 兼容非 lib*.so 命名，并通过 target_link_libraries 保证库顺序正确
         target_link_directories(ctp_bridge_native PRIVATE "${THOST_API_DIR}")
-        target_link_options(ctp_bridge_native PRIVATE
-            "LINKER:-l:thosttraderapi_se.so"
-            "LINKER:-l:thostmduserapi_se.so"
+        target_link_libraries(ctp_bridge_native PRIVATE
+            "-l:thosttraderapi_se.so"
+            "-l:thostmduserapi_se.so"
         )
         set_target_properties(ctp_bridge_native PROPERTIES
             BUILD_RPATH "${THOST_API_DIR}"
