@@ -109,12 +109,12 @@ class BaseTradeStrategy(BaseModule):
 
     async def _check_initial_connection(self):
         if not self._trade_connected:
-            logger.info('CTP 前置未连接，可能处于非交易时段，等待自动重连...')
+            logger.debug('CTP 前置未连接，可能处于非交易时段，等待自动重连...')
 
     async def _session_init(self):
         """盘前初始化：刷新账户、撤销未成交订单、同步持仓"""
         if not self._trade_connected:
-            logger.warning('CTP 交易前置未连接，跳过 session_init')
+            logger.debug('CTP 交易前置未连接，跳过 session_init')
             return
         try:
             await self.refresh_account()
@@ -677,14 +677,14 @@ class BaseTradeStrategy(BaseModule):
     async def on_ctp_connected(self, channel, data: dict):
         self._trade_connected = True
         self.redis_client.set('STATE:CTP_CONNECTED', 1)
-        logger.info('CTP 前置已连接')
+        logger.debug('CTP 前置已连接')
 
     @RegisterCallback(channel='MSG:CTP:RSP:TRADE:OnFrontDisconnected:*')
     async def on_ctp_disconnected(self, channel, data: dict):
         self._trade_connected = False
         self.redis_client.set('STATE:CTP_CONNECTED', 0)
         reason = data.get('Reason', '未知') if isinstance(data, dict) else '未知'
-        logger.info(f'CTP 前置断开连接，原因: {reason}')
+        logger.debug(f'CTP 前置断开连接，原因: {reason}')
 
     @RegisterCallback(channel='MSG:CTP:RSP:TRADE:OnRspUserLogin:*')
     async def on_ctp_login(self, channel, data: dict):
@@ -695,14 +695,14 @@ class BaseTradeStrategy(BaseModule):
             self._trade_connected = True
             self.redis_client.set('STATE:CTP_CONNECTED', 1)
             trading_day = data.get('TradingDay', '')
-            logger.info(f'CTP 登录成功，交易日: {trading_day}')
+            logger.debug(f'CTP 登录成功，交易日: {trading_day}')
             # 如果在交易时段，自动执行盘前初始化
             today = timezone.localtime()
             now = int(today.strftime('%H%M'))
             _, trading = await is_trading_day(today)
             night_session = await self._has_night_session_tonight()
             if trading and (850 <= now <= 1550) or night_session and (2050 <= now <= 2359):
-                logger.info('登录后自动执行 session_init...')
+                logger.debug('登录后自动执行 session_init...')
                 await self._session_init()
         else:
             error_msg = data.get('ErrorMsg', '未知错误')
@@ -716,20 +716,20 @@ class BaseTradeStrategy(BaseModule):
     async def session_init_day(self):
         _, trading = await is_trading_day(timezone.localtime())
         if trading:
-            logger.info('日盘盘前初始化...')
+            logger.debug('日盘盘前初始化...')
             await self._session_init()
 
     @RegisterCallback(crontab='15 15 * * *')
     async def session_init_afternoon(self):
         _, trading = await is_trading_day(timezone.localtime())
         if trading:
-            logger.info('收盘后刷新账户持仓...')
+            logger.debug('收盘后刷新账户持仓...')
             await self._session_init()
 
     @RegisterCallback(crontab='50 20 * * *')
     async def session_init_night(self):
         if await self._has_night_session_tonight():
-            logger.info('夜盘盘前初始化...')
+            logger.debug('夜盘盘前初始化...')
             await self._session_init()
         else:
             logger.info('今晚没有夜盘。')
