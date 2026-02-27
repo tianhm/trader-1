@@ -54,7 +54,6 @@ czce_ip = 'www.czce.com.cn'     # www.czce.com.cn
 dce_ip = 'www.dce.com.cn'        # www.dce.com.cn
 gfex_ip = 'www.gfex.com.cn'
 IGNORE_INST_LIST = config.get('TRADE', 'ignore_inst').split(',')
-INE_INST_LIST = ['sc', 'bc', 'nr', 'lu']
 ORDER_REF_SIGNAL_ID_START = -5
 
 
@@ -190,13 +189,9 @@ async def update_from_shfe(day: datetime.datetime) -> bool:
                     name = inst_data['PRODUCTNAME'].strip()
                     if code not in inst_name_dict:
                         inst_name_dict[code] = name
-                    exchange_str = ExchangeType.SHFE
-                    # 上期能源的四个品种
-                    if code in INE_INST_LIST:
-                        exchange_str = ExchangeType.INE
                     DailyBar.objects.update_or_create(
                         code=code + inst_data['DELIVERYMONTH'],
-                        exchange=exchange_str, time=day, defaults={
+                        exchange=ExchangeType.SHFE, time=day, defaults={
                             'expire_date': inst_data['DELIVERYMONTH'],
                             'open': inst_data['OPENPRICE'] if inst_data['OPENPRICE'] else inst_data['CLOSEPRICE'],
                             'high': inst_data['HIGHESTPRICE'] if inst_data['HIGHESTPRICE'] else
@@ -540,7 +535,26 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
             handle_rollover(inst, check_bar)
             updated = True
         else:
-            store_main_bar(inst, check_bar)
+            # 禁止主力代码回滚：若候选合约不晚于当前主力，优先写当前主力当日bar
+            if check_bar.code and check_bar.code < cur_main_code:
+                cur_main_bar = DailyBar.objects.filter(
+                    exchange=inst.exchange,
+                    code=cur_main_code,
+                    time=day.date(),
+                ).first()
+                if cur_main_bar is not None:
+                    store_main_bar(inst, cur_main_bar)
+                else:
+                    logger.warning(
+                        'calc_main_inst skip rollback write: %s.%s day=%s cur_main=%s candidate=%s',
+                        inst.exchange,
+                        inst.product_code,
+                        day.date(),
+                        cur_main_code,
+                        check_bar.code,
+                    )
+            else:
+                store_main_bar(inst, check_bar)
     return inst.main_code, updated
 
 
@@ -857,9 +871,8 @@ async def get_contracts_argument(day: datetime.datetime | None = None) -> bool:
                     code = re.findall('[A-Za-z]+', inst_data['INSTRUMENTID'])[0]
                     if code in IGNORE_INST_LIST:
                         continue
-                    exchange = ExchangeType.INE if code in INE_INST_LIST else ExchangeType.SHFE
                     limit_ratio = str_to_number(inst_data['UPPER_VALUE'])
-                    key = f"LIMITRATIO:{exchange}:{code}:{inst_data['INSTRUMENTID']}"
+                    key = f"LIMITRATIO:{ExchangeType.SHFE}:{code}:{inst_data['INSTRUMENTID']}"
                     state_store.set(key, limit_ratio)
             # 大商所
             async with session.post(f'http://{dce_ip}/publicweb/notificationtips/exportDayTradPara.html',

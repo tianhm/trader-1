@@ -37,7 +37,7 @@ class Migration(migrations.Migration):
             name='DailyBar',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('exchange', models.CharField(choices=[('SHFE', '上期所'), ('DCE', '大商所'), ('CZCE', '郑商所'), ('CFFEX', '中金所'), ('INE', '上期能源'), ('GFEX', '广期所')], max_length=8, verbose_name='交易所')),
+                ('exchange', models.CharField(choices=[('SHFE', '上期所'), ('DCE', '大商所'), ('CZCE', '郑商所'), ('CFFEX', '中金所'),  ('GFEX', '广期所')], max_length=8, verbose_name='交易所')),
                 ('code', models.CharField(db_index=True, max_length=16, null=True, verbose_name='品种代码')),
                 ('expire_date', models.IntegerField(null=True, verbose_name='交割时间')),
                 ('time', models.DateField(db_index=True, verbose_name='时间')),
@@ -58,7 +58,7 @@ class Migration(migrations.Migration):
             name='Instrument',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('exchange', models.CharField(choices=[('SHFE', '上期所'), ('DCE', '大商所'), ('CZCE', '郑商所'), ('CFFEX', '中金所'), ('INE', '上期能源'), ('GFEX', '广期所')], max_length=8, verbose_name='交易所')),
+                ('exchange', models.CharField(choices=[('SHFE', '上期所'), ('DCE', '大商所'), ('CZCE', '郑商所'), ('CFFEX', '中金所'),  ('GFEX', '广期所')], max_length=8, verbose_name='交易所')),
                 ('section', models.CharField(blank=True, choices=[('股票', '股票'), ('债券', '债券'), ('基本金属', '基本金属'), ('农产品', '农产品'), ('能源化工', '能源化工'), ('黑色建材', '黑色建材')], max_length=48, null=True, verbose_name='分类')),
                 ('name', models.CharField(blank=True, max_length=32, null=True, verbose_name='名称')),
                 ('product_code', models.CharField(max_length=16, unique=True, verbose_name='代码')),
@@ -85,7 +85,7 @@ class Migration(migrations.Migration):
             name='MainBar',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('exchange', models.CharField(choices=[('SHFE', '上期所'), ('DCE', '大商所'), ('CZCE', '郑商所'), ('CFFEX', '中金所'), ('INE', '上期能源'), ('GFEX', '广期所')], max_length=8, verbose_name='交易所')),
+                ('exchange', models.CharField(choices=[('SHFE', '上期所'), ('DCE', '大商所'), ('CZCE', '郑商所'), ('CFFEX', '中金所'),  ('GFEX', '广期所')], max_length=8, verbose_name='交易所')),
                 ('product_code', models.CharField(db_index=True, max_length=8, null=True, verbose_name='品种代码')),
                 ('code', models.CharField(blank=True, max_length=16, null=True, verbose_name='合约代码')),
                 ('time', models.DateField(db_index=True, verbose_name='时间')),
