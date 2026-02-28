@@ -176,25 +176,12 @@ def status_data(request):
     try:
         stra = Strategy.objects.get(id=request.GET.get('strategy'))
         return JsonResponse({
+            'section_labels': [s.label for s in SectionType],
             'section': [
                 Trade.objects.filter(
                     strategy=stra, close_time__isnull=True,
-                    instrument__section=SectionType.Stock).count(),
-                Trade.objects.filter(
-                    strategy=stra, close_time__isnull=True,
-                    instrument__section=SectionType.Bond).count(),
-                Trade.objects.filter(
-                    strategy=stra, close_time__isnull=True,
-                    instrument__section=SectionType.Metal).count(),
-                Trade.objects.filter(
-                    strategy=stra, close_time__isnull=True,
-                    instrument__section=SectionType.Agricultural).count(),
-                Trade.objects.filter(
-                    strategy=stra, close_time__isnull=True,
-                    instrument__section=SectionType.EnergyChemical).count(),
-                Trade.objects.filter(
-                    strategy=stra, close_time__isnull=True,
-                    instrument__section=SectionType.BlackMaterial).count()
+                    instrument__section=s.value).count()
+                for s in SectionType
             ],
             'long': Trade.objects.filter(
                     strategy=stra, close_time__isnull=True, direction=DirectionType.LONG).count(),

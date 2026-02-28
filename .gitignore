@@ -43,6 +43,8 @@ examples/
 test/
 deploy/
 brother3.py
+doc/
+migrations/
 # ===== IDE / Editor =====
 .idea/
 .vscode/

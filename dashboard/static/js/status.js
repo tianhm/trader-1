@@ -15,14 +15,7 @@ secChart.setOption({
   },
   radar: [
     {
-      indicator: [
-        { text: "股票", max: 10 },
-        { text: "债券", max: 10 },
-        { text: "基本金属", max: 10 },
-        { text: "农产品", max: 10 },
-        { text: "能源化工", max: 10 },
-        { text: "黑色建材", max: 10 },
-      ],
+      indicator: [],
     },
   ],
   series: [
@@ -94,17 +87,13 @@ posChart.setOption({
 });
 
 $.get("/status_data?strategy=" + getUrlParameter("strategy"), function (rst) {
+  var maxVal = Math.max.apply(null, rst.section) || 10;
   secChart.setOption({
     radar: [
       {
-        indicator: [
-          { text: "股票", max: Math.max(rst.section) },
-          { text: "债券", max: Math.max(rst.section) },
-          { text: "基本金属", max: Math.max(rst.section) },
-          { text: "农产品", max: Math.max(rst.section) },
-          { text: "能源化工", max: Math.max(rst.section) },
-          { text: "黑色建材", max: Math.max(rst.section) },
-        ],
+        indicator: rst.section_labels.map(function (label) {
+          return { text: label, max: maxVal };
+        }),
       },
     ],
     series: [

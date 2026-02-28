@@ -32,24 +32,37 @@ class ExchangeType(models.TextChoices):
 
 
 class SectionType(models.TextChoices):
-    Stock = 'Stock', '股票'
-    Bond = 'Bond', '债券'
-    Metal = 'Metal', '基本金属'
-    Agricultural = 'Agricultural', '农产品'
-    EnergyChemical = 'EnergyChemical', '能源化工'
-    BlackMaterial = 'BlackMaterial', '黑色建材'
+    Financial = '金融', '金融'
+    PreciousMetal = '贵金属', '贵金属'
+    BaseMetal = '有色金属', '有色金属'
+    Ferrous = '黑色产业', '黑色产业'
+    Energy = '能源', '能源'
+    Chemical = '化工', '化工'
+    Agriculture = '农牧', '农牧'
+    NewEnergy = '新能源', '新能源'
 
 
 class SortType(models.TextChoices):
-    Stock = 'Stock', '股票'
-    Bond = 'Bond', '债券'
-    Rare = 'Rare', '贵金属'
-    Metal = 'Metal', '基本金属'
-    EdibleOil = 'EdibleOil', '食用油'
-    Feed = 'Feed', '动物饲料'
-    Cotton = 'Cotton', '棉'
-    EnergyChemical = 'EnergyChemical', '能源化工'
-    BlackMaterial = 'BlackMaterial', '黑色建材'
+    StockIndex = '股指', '股指'
+    Treasury = '国债', '国债'
+    Shipping = '航运', '航运'
+    Precious = '贵金属', '贵金属'
+    CopperChain = '铜产业链', '铜产业链'
+    AluminumChain = '铝产业链', '铝产业链'
+    OtherNonferrous = '其他有色', '其他有色'
+    SteelChain = '钢铁链', '钢铁链'
+    BuildMaterial = '建材', '建材'
+    CrudeOilChain = '原油链', '原油链'
+    Olefin = '烯烃', '烯烃'
+    Aromatic = '芳烃', '芳烃'
+    Rubber = '橡胶', '橡胶'
+    CoalChem = '煤化工', '煤化工'
+    OilFat = '油脂油料', '油脂油料'
+    GrainFeed = '谷物饲料', '谷物饲料'
+    SoftAgri = '软商品', '软商品'
+    Livestock = '畜牧', '畜牧'
+    Forestry = '林纸', '林纸'
+    NewEnergyMat = '新能源材料', '新能源材料'
 
 
 class AddressType(models.TextChoices):
